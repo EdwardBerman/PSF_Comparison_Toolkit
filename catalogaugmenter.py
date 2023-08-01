@@ -59,6 +59,14 @@ class catalog:
         self.hsm_g2 = []
         self.fwhm = []
 
+    def set_sky_level(self, sky_level):
+        self.sky_level = sky_level
+        return
+
+    def set_sky_std(self, sky_std):
+        self.sky_std = sky_std
+        return
+
     def augment(self, psf):
         #current_catalog = fits.open(self.catalog)
         data = self.data
@@ -111,17 +119,18 @@ class catalog:
 
 
 
-    def add_noise_flux(self, psf_list):
+    def add_noise_flux(self, psf_list, sky_level = 0.0, sky_std = 0.0):
         #catalog = fits.open(self.catalog)
         #data = Table(catalog[2].data)
         data = self.data
-        sky_level = self.sky_level
-        sky_std = self.sky_std
+        #sky_level = sky_level
+        #sky_std = sky_std
+        #print(sky_level, sky_std)
         for psf in psf_list:
             for i in range(len(data['FLUX_AUTO'])):
                 noise = np.random.normal(loc = sky_level, scale = sky_std, size = data[psf.nameColumn()][i].shape)
                 data[psf.nameColumn()][i] *= data['FLUX_AUTO'][i]
-                data[psf.nameColumn()][i] = data[psf.nameColumn()][i]/np.nansum(data[psf.nameColumn()][i])
+                #data[psf.nameColumn()][i] = data[psf.nameColumn()][i]/np.nansum(data[psf.nameColumn()][i])
                 data[psf.nameColumn()][i] += noise
         #catalog.close()
         self.data = data 
@@ -195,14 +204,14 @@ class catalog:
             vignets_sizes.append(catalog[2].data[colname].shape[1])
 
         min_dim = min(vignets_sizes)
-        print("Minimum dimension of vignets is", min_dim)
+        #print("Minimum dimension of vignets is", min_dim)
         data = Table(catalog[2].data)
         catalog.close()
 
         if vignet_size is not None:
             min_dim = vignet_size
         
-        print("Minimum dimension of vignets is", min_dim)
+        #print("Minimum dimension of vignets is", min_dim)
 
         for colname in vignets_colnames:
             new_column_data = []
@@ -224,7 +233,7 @@ class catalog:
                             except:
                                 data.remove_column(colname+'_CROPPED')
                                 data.add_column(new_column)
-                            print("Cropped column", colname)
+                            #print("Cropped column", colname)
         self.data = data
         return
     
