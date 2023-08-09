@@ -352,7 +352,10 @@ class psf:
 class epsfex(psf):
     def __init__(self, psfFileName):
         super().__init__(psfFileName)
-        self.psfex = psfex.PSFEx(self.psfFileName)
+        try:
+            self.psfex = psfex.PSFEx(self.psfFileName)
+        except:
+            print("Warning: epsfex unable to load PSF file, method for naming columns and obtaining coordinates still available")
 
     def render(self, x, y, vignet_size = 75):
         psfex_model = self.psfex
@@ -394,7 +397,11 @@ class webb_psf(psf):
 class shopt(psf):
     def __init__(self, psfFileName):
         super().__init__(psfFileName)
-        self.polMatrix, self.degree = read_shopt(self.psfFileName)
+        try:
+            self.polMatrix, self.degree = read_shopt(self.psfFileName)
+        except:
+            print("Warning: shopt unable to load summary.shopt file, method for naming columns and obtaining coordinates still available")
+
 
     def render(self, u, v):
         return p(u, v, self.polMatrix, self.degree)
@@ -408,7 +415,10 @@ class shopt(psf):
 class piff_psf(psf):
     def __init__(self, psfFileName):
         super().__init__(psfFileName)
-        self.piff_psf = piff.read(self.psfFileName)
+        try:
+            self.piff_psf = piff.read(self.psfFileName)
+        except:
+            print("Warning: piff unable to load .piff file, method for naming columns and obtaining coordinates still available")
 
     def render(self, u, v):
         piff_psf = self.piff_psf

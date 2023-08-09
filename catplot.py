@@ -1,5 +1,7 @@
 import unittest
 test = unittest.TestCase
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import rc,rcParams
@@ -74,8 +76,13 @@ class resid_plot(plot):
         self.sum_residuals = 0.0
         self.fwhm_model = []
         self.fwhm_data = []
+        self.cropped_size = self.cropped_stars[0].shape
+        self.vignet_hsm = []
+        self.psf_hsm = []
+        self.wg = []
 
-    def preprocessing(self):
+
+    def preprocessing(self, hsm_fit=False):
         stars = self.cropped_stars
         for i in range(len(stars)):
             #count = 0
@@ -102,9 +109,64 @@ class resid_plot(plot):
             #print(np.nansum(psfs[i]))
         self.cropped_psfs = psfs
         self.avg_psf = np.nanmean(self.cropped_psfs, axis=0)
+        if hsm_fit:
+            for starstamp in stars:
+                starstamp[starstamp<= -1000] = np.nan
+                gs_object = galsim.Image(starstamp, wcs=galsim.PixelScale(0.3), xmin=0, ymin=0)
+                try:
+                    HSM_fit=gs_object.FindAdaptiveMom()
+                    self.vignet_hsm.append(1)
+                except:
+                    try:
+                        gs_object = galsim.Image(starstamp+abs(np.min(starstamp)), wcs=galsim.PixelScale(0.3), xmin=0, ymin=0)
+                        HSM_fit=gs_object.FindAdaptiveMom()
+                        self.vignet_hsm.append(1)
+                    except:
+                        self.vignet_hsm.append(0)
+                        #print("Vignet HSM failed")
 
+            for psfstamp in self.cropped_psfs:
+                gs_object = galsim.Image(psfstamp, wcs=galsim.PixelScale(0.3), xmin=0, ymin=0)
+                try:
+                    HSM_fit=gs_object.FindAdaptiveMom()
+                    self.psf_hsm.append(1)
+                except:
+                    try:
+                        gs_object = galsim.Image(psfstamp+abs(np.min(psfstamp)), wcs=galsim.PixelScale(0.3), xmin=0, ymin=0)
+                        HSM_fit=gs_object.FindAdaptiveMom()
+                        self.psf_hsm.append(1)
+                    except:
+                        self.psf_hsm.append(0)
+                        #print("PSF HSM failed")
+
+            self.wg = [a == 1 and b == 1 for a, b in zip(self.vignet_hsm, list(self.psf_hsm))]
+        else:
+            self.wg = [True for i in range(len(self.cropped_stars))]
+            #self.wg = [True if num == 1 else False for num in np.array(self.vignet_hsm)]
+        '''
+        if hsm_fit_webb:
+            for starstamp in self.cropped_stars:
+                gs_object = galsim.Image(starstamp, wcs=galsim.PixelScale(0.3), xmin=0, ymin=0)
+                try:
+                    HSM_fit=gs_object.FindAdaptiveMom()
+                    self.vignet_hsm.append(1)
+                except:
+                    try:
+                        gs_object = galsim.Image(starstamp+abs(np.min(starstamp)), wcs=galsim.PixelScale(0.3), xmin=0, ymin=0)
+                        HSM_fit=gs_object.FindAdaptiveMom()
+                        self.vignet_hsm.append(1)
+                    except:
+                        self.vignet_hsm.append(0)
+                        #print("Vignet HSM failed")
+
+
+            self.wg = [True if num == 1 else False for num in self.vignet_hsm]
+        else:
+            self.wg = [True for i in range(len(self.cropped_stars))]
+        '''
+        
     def return_residuals_sum(self):
-        return self.sum_residuals
+        return self.sum_residuals/(self.cropped_size[0] * self.cropped_size[1])
 
     def set_residuals_sum(self):
         self.sum_residuals = np.nansum(self.avg_residual)
@@ -208,6 +270,11 @@ class mean_relative_error_plot(resid_plot):
                 for k in range(stars[0].shape[1]):
                     relative_error[j,k] = (stars[i][j,k] - psfs[i][j,k])/(stars[i][j,k] + 1.0e-6)
             resids.append(relative_error)
+        for i in range(len(resids)):
+            for j in range(len(resids[i])):
+                for k in range(len(resids[i][j])):
+                    if (resids[i][j,k] > 50) or (resids[i][j,k] < -50):
+                        resids[i][j,k] = np.nan
         self.avg_residual = np.nanmean(resids, axis=0)
         self.set_residuals_sum()
 
@@ -223,8 +290,13 @@ class mean_absolute_error_plot(resid_plot):
             absolute_error = np.zeros((stars[0].shape[0], stars[0].shape[1]))
             for j in range(stars[0].shape[0]):
                 for k in range(stars[0].shape[1]):
-                    absolute_error[j,k] = np.abs(stars[i][j,k] - psfs[i][j,k])
+                    absolute_error[j,k] = np.abs(stars[i][j,k] - psfs[i][j,k])/np.abs(stars[i][j,k] + 1.0e-6)
             resids.append(absolute_error)
+        for i in range(len(resids)):
+            for j in range(len(resids[i])):
+                for k in range(len(resids[i][j])):
+                    if (resids[i][j,k] > 50) or (resids[i][j,k] < -50):
+                        resids[i][j,k] = np.nan
         self.avg_residual = np.nanmean(resids, axis=0)
         self.set_residuals_sum()
 
@@ -264,12 +336,31 @@ class chi_2_error_plot(resid_plot):
         dof = npix - nparams
         chi2_vals = []
 
+        def count_nan_inf(arr):
+            # Convert the input list to a NumPy array
+            np_arr = np.array(arr)
+            # Count the number of NaNs and Infs in the array
+            nan_count = np.count_nonzero(np.isnan(np_arr))
+            inf_count = np.count_nonzero(np.isinf(np_arr))
+            return nan_count, inf_count
+
+
         for i in range(len(stars)):
-            resids.append(np.divide(np.square(stars[i] - psfs[i]), np.square(noise_map[i] + 1.0e-6)))
-            chi2_finite = np.divide(np.square(stars[i] - psfs[i]), np.square(noise_map[i] + 1.0e-6))[np.isfinite(np.divide(np.square(stars[i] - psfs[i]), np.square(noise_map[i] + 1.0e-6)))]
-            ddof = chi2_finite.size-nparams
-            chi2_vals.append(chi2_finite.sum()/ddof)
-        self.avg_residual = np.nanmean(resids, axis=0)
+            if self.wg[i] == True:
+                resids.append(np.divide(np.square(stars[i] - psfs[i]), np.square(noise_map[i])))
+                nan_count, inf_count = count_nan_inf(resids[i])
+                chi2_finite_temp = np.divide(np.square(stars[i] - psfs[i]), np.square(noise_map[i]))
+                chi2_finite = chi2_finite_temp[np.isfinite(chi2_finite_temp)]
+                ddof = chi2_finite.size - nparams - (nan_count + inf_count)
+                if chi2_finite.sum()/ddof > 75:
+                    print(np.sum(np.isnan(stars[i]))/chi2_finite.size)
+                    print("This star had chi square greater than 75: ", i)
+                chi2_vals.append(chi2_finite.sum()/ddof)
+            else:
+                resids.append(np.full(stars[0].shape, np.nan))
+                chi2_vals.append(np.nan)
+                #chi2_vals.append(0.0)
+        self.avg_residual = np.ma.mean(  np.ma.masked_invalid(resids), axis=0).data
         self.set_residuals_sum()
         self.chi2_vals = chi2_vals
 
@@ -296,136 +387,7 @@ class ssim_error_plot(resid_plot):
             nrmse.append(normalized_root_mse(stars[i], psfs[i]))
         
         self.avg_residual = np.nanmean(ssims, axis=0)
+        #self.avg_residual = np.nanmean(ssims)
+        #print(f'Median SSIM: %.4f\nMedian Norm. RMSE: %.4f' % (np.median(ssim_val), np.median(nrmse)))
         self.set_residuals_sum()
 
-
-directory_path = "/home/eddieberman/research/mcclearygroup/cweb_psf/augmented_starcatalogs"
-file_list = glob.glob(directory_path + "/*augmented_corrected_psf_starcat.fits")
-
-def extract_3_numbers(filename):
-    pattern = r'\d{3}'
-    matches = re.findall(pattern, filename)
-    return matches
-
-#columns = ['Detector', 'Filter', 'PSFex: SSIM ', 'PSFex: Chi-Square', 'PSFex: Absolute Error', 'PSFex: Relative Error','WebbPSF: SSIM ', 'WebbPSF: Chi-Square', 'WebbPSF: Absolute Error', 'WebbPSF: Relative Error']
-columns = ['Detector', 'Filter', 'PSFex: Absolute Error', 'WebbPSF: Absolute Error', 'PSFex: Error', 'WebbPSF: Error','PSFex: Chi-Square', 'WebbPSF: Chi-Square','PSFex: Relative Error', 'WebbPSF: Relative Error', 'PSFex: SSIM ', 'WebbPSF: SSIM ', 'PSFex: FWHM Residual', 'WebbPSF: FWHM Residual', 'PSFex: Reduced Chi Square', 'WebbPSF: Reduced Chi Square']
-data_table = Table(names=columns, dtype=['S10', 'S10', 'f8', 'f8', 'f8', 'f8', 'f8', 'f8', 'f8', 'f8', 'f8', 'f8', 'f8', 'f8', 'f8', 'f8'])
-
-for file in file_list:
-    try:
-        catalog_object_name = file
-        epsfex_object_name = '/home/eddieberman/research/mcclearygroup/cweb_psf/augmented_starcatalogs/f150w_b2_starcat.psf'
-        
-        chi2_name = file.replace("augmented_corrected_psf_starcat.fits", "psfex_chi2.png")
-        mre_name = file.replace("augmented_corrected_psf_starcat.fits", "psfex_mre_resid.png")
-        abs_name = file.replace("augmented_corrected_psf_starcat.fits", "psfex_abs_resid.png")
-        ssim_name = file.replace("augmented_corrected_psf_starcat.fits", "psfex_ssim.png")
-        err_name = file.replace("augmented_corrected_psf_starcat.fits", "psfex_err.png")
-
-        mean_absolute_error_plot_psfex = mean_absolute_error_plot(ca.catalog(catalog_object_name), ca.epsfex(epsfex_object_name))
-        mean_absolute_error_plot_psfex.preprocessing()
-        mean_absolute_error_plot_psfex.set_residuals()
-        sum_residuals_abs_psfex = mean_absolute_error_plot_psfex.return_residuals_sum()
-        mean_absolute_error_plot_psfex.calc_fwhm()
-        avg_star_fwhm = np.nanmean(mean_absolute_error_plot_psfex.return_fwhm_star())
-        avg_psf_fwhm = np.nanmean(mean_absolute_error_plot_psfex.return_fwhm_psf())
-        mean_absolute_error_plot_psfex.set_titles([f'Average Star\n Avg FWHM = {avg_star_fwhm}', f'Average PSF\n Avg FWHM = {avg_psf_fwhm}', f'Average Absolute Error \n Sum Absolute Error = {sum_residuals_abs_psfex}'])
-        mean_absolute_error_plot_psfex.save_figure(outname=abs_name)
-        psfex_fwhm_residual = np.nanmean(np.array(mean_absolute_error_plot_psfex.return_fwhm_star()) - np.array(mean_absolute_error_plot_psfex.return_fwhm_psf()))
-
-        mean_chi2_plot_psfex = chi_2_error_plot(ca.catalog(catalog_object_name), ca.epsfex(epsfex_object_name))
-        mean_chi2_plot_psfex.preprocessing()
-        mean_chi2_plot_psfex.set_residuals()
-        sum_residuals_chi2_psfex = mean_chi2_plot_psfex.return_residuals_sum()
-        mean_chi2_plot_psfex.set_titles([f'Average Star\n Avg FWHM = {avg_star_fwhm}', f'Average PSF\n Avg FWHM = {avg_psf_fwhm}', f'Average Chi2 Error \n Sum Chi2 Error = {sum_residuals_chi2_psfex}'])
-        mean_chi2_plot_psfex.save_figure(outname=chi2_name)
-        reduced_chi2_psfex = np.nanmean(mean_chi2_plot_psfex.return_chi2_vals())
-
-        mean_mre_plot_psfex = mean_relative_error_plot(ca.catalog(catalog_object_name), ca.epsfex(epsfex_object_name))
-        mean_mre_plot_psfex.preprocessing()
-        mean_mre_plot_psfex.set_residuals()
-        sum_residuals_mre_psfex = mean_mre_plot_psfex.return_residuals_sum()
-        mean_mre_plot_psfex.set_titles([f'Average Star\n Avg FWHM = {avg_star_fwhm}', f'Average PSF\n Avg FWHM = {avg_psf_fwhm}', f'Average MRE Error \n Sum MRE Error = {sum_residuals_mre_psfex}'])
-        mean_mre_plot_psfex.save_figure(outname=mre_name)
-
-        ssim_plot_psfex = ssim_error_plot(ca.catalog(catalog_object_name), ca.epsfex(epsfex_object_name))
-        ssim_plot_psfex.preprocessing()
-        ssim_plot_psfex.set_residuals()
-        sum_residuals_ssim_psfex = ssim_plot_psfex.return_residuals_sum()
-        ssim_plot_psfex.set_titles([f'Average Star\n Avg FWHM = {avg_star_fwhm}', f'Average PSF\n Avg FWHM = {avg_psf_fwhm}', f'Average SSIM Error \n Sum SSIM Error = {sum_residuals_ssim_psfex}'])
-        ssim_plot_psfex.save_figure(outname=ssim_name)
-
-        mean_error_plot_psfex = mean_absolute_error_plot(ca.catalog(catalog_object_name), ca.epsfex(epsfex_object_name))
-        mean_error_plot_psfex.preprocessing()
-        mean_error_plot_psfex.set_residuals()
-        sum_residuals_err_psfex = mean_error_plot_psfex.return_residuals_sum()
-        mean_error_plot_psfex.set_titles([f'Average Star\n Avg FWHM = {avg_star_fwhm}', f'Average PSF\n Avg FWHM = {avg_psf_fwhm}', f'Average Error \n Sum Absolute Error = {sum_residuals_abs_psfex}'])
-        mean_error_plot_psfex.save_figure(outname=err_name)
-
-        webbpsf_object_name = '/home/eddieberman/research/mcclearygroup/cweb_psf/augmented_starcatalogs/f150w_b2_WebbPSF.fits'
-        chi2_name = file.replace("augmented_corrected_psf_starcat.fits", "webb_chi2.png")
-        mre_name = file.replace("augmented_corrected_psf_starcat.fits", "webb_mre_resid.png")
-        abs_name = file.replace("augmented_corrected_psf_starcat.fits", "webb_abs_resid.png")
-        ssim_name = file.replace("augmented_corrected_psf_starcat.fits", "webb_ssim.png")
-        err_name = file.replace("augmented_corrected_psf_starcat.fits", "webb_err.png")
-
-        mean_absolute_error_plot_webbpsf = mean_absolute_error_plot(ca.catalog(catalog_object_name), ca.webb_psf(webbpsf_object_name))
-        mean_absolute_error_plot_webbpsf.preprocessing()
-        mean_absolute_error_plot_webbpsf.set_residuals()
-        sum_residuals_abs_webb = mean_absolute_error_plot_webbpsf.return_residuals_sum()
-        mean_absolute_error_plot_webbpsf.calc_fwhm()
-        avg_star_fwhm = np.nanmean(mean_absolute_error_plot_webbpsf.return_fwhm_star())
-        avg_psf_fwhm = np.nanmean(mean_absolute_error_plot_webbpsf.return_fwhm_psf())
-        mean_absolute_error_plot_webbpsf.set_titles([f'Average Star\n Avg FWHM = {avg_star_fwhm}', f'Average PSF\n Avg FWHM = {avg_psf_fwhm}', f'Average Absolute Error \n Sum Absolute Error = {sum_residuals_abs_webb}'])
-        mean_absolute_error_plot_webbpsf.save_figure(outname=abs_name)
-        webbpsf_fwhm_residual = np.nanmean(np.array(mean_absolute_error_plot_webbpsf.return_fwhm_star()) - np.array(mean_absolute_error_plot_webbpsf.return_fwhm_psf()))
-
-        mean_chi2_plot_webbpsf = chi_2_error_plot(ca.catalog(catalog_object_name), ca.webb_psf(webbpsf_object_name))
-        mean_chi2_plot_webbpsf.preprocessing()
-        mean_chi2_plot_webbpsf.set_residuals()
-        sum_residuals_chi2_webb = mean_chi2_plot_webbpsf.return_residuals_sum()
-        mean_chi2_plot_webbpsf.set_titles([f'Average Star\n Avg FWHM = {avg_star_fwhm}', f'Average PSF\n Avg FWHM = {avg_psf_fwhm}', f'Average Chi2 Error \n Sum Chi2 Error = {sum_residuals_chi2_webb}'])
-        mean_chi2_plot_webbpsf.save_figure(outname=chi2_name)
-        reduced_chi2_webb = np.nanmean(mean_chi2_plot_webbpsf.return_chi2_vals())
-
-        mean_mre_plot_webbpsf = mean_relative_error_plot(ca.catalog(catalog_object_name), ca.webb_psf(webbpsf_object_name))
-        mean_mre_plot_webbpsf.preprocessing()
-        mean_mre_plot_webbpsf.set_residuals()
-        sum_residuals_mre_webb = mean_mre_plot_webbpsf.return_residuals_sum()
-        mean_mre_plot_webbpsf.set_titles([f'Average Star\n Avg FWHM = {avg_star_fwhm}', f'Average PSF\n Avg FWHM = {avg_psf_fwhm}', f'Average MRE Error \n Sum MRE Error = {sum_residuals_mre_webb}'])
-        mean_mre_plot_webbpsf.save_figure(outname=mre_name)
-
-        ssim_plot_webbpsf = ssim_error_plot(ca.catalog(catalog_object_name), ca.webb_psf(webbpsf_object_name))
-        ssim_plot_webbpsf.preprocessing()
-        ssim_plot_webbpsf.set_residuals()
-        sum_residuals_ssim_webb = ssim_plot_webbpsf.return_residuals_sum()
-        ssim_plot_webbpsf.set_titles([f'Average Star\n Avg FWHM = {avg_star_fwhm}', f'Average PSF\n Avg FWHM = {avg_psf_fwhm}', f'Average SSIM Error \n Sum SSIM Error = {sum_residuals_ssim_webb}'])
-        ssim_plot_webbpsf.save_figure(outname=ssim_name)
-
-        mean_error_plot_webbpsf = mean_error_plot(ca.catalog(catalog_object_name), ca.webb_psf(webbpsf_object_name))
-        mean_error_plot_webbpsf.preprocessing()
-        mean_error_plot_webbpsf.set_residuals()
-        sum_residuals_err_webb = mean_error_plot_webbpsf.return_residuals_sum()
-        mean_error_plot_webbpsf.set_titles([f'Average Star\n Avg FWHM = {avg_star_fwhm}', f'Average PSF\n Avg FWHM = {avg_psf_fwhm}', f'Average Error \n Sum Error = {sum_residuals_err_webb}'])
-        mean_error_plot_webbpsf.save_figure(outname=err_name)
-        
-        letter_number_codes = re.findall(r'[A-Za-z]\d', file)
-        print('\n', 'F'+extract_3_numbers(file)[0]+'W_', letter_number_codes[1], ' Sum Absolute Error PSFex = ', sum_residuals_abs_psfex, ' Sum Absolute Error WebbPSF = ', sum_residuals_abs_webb, 'Sum Error PSFex =', sum_residuals_err_psfex, 'Sum Error WebbPSF', sum_residuals_err_webb, ' Sum Chi2 Error PSFex = ', sum_residuals_chi2_psfex, ' Sum Chi2 Error WebbPSF = ', sum_residuals_chi2_webb, ' Sum MRE Error PSFex = ', sum_residuals_mre_psfex, ' Sum MRE Error WebbPSF = ', sum_residuals_mre_webb, ' Sum SSIM Error PSFex = ', sum_residuals_ssim_psfex, ' Sum SSIM Error WebbPSF = ', sum_residuals_ssim_webb, 'FWHM Residual PSFex', psfex_fwhm_residual, 'FWHM Residual WebbPSF', webbpsf_fwhm_residual, 'Reduced Chi Square PSFex', reduced_chi2_psfex, 'Reduced Chi Square WebbPSF', reduced_chi2_webb)
-        data_table.add_row(['F'+extract_3_numbers(file)[0]+'W', letter_number_codes[1], sum_residuals_abs_psfex, sum_residuals_abs_webb, sum_residuals_err_psfex, sum_residuals_err_webb, sum_residuals_chi2_psfex, sum_residuals_chi2_webb, sum_residuals_mre_psfex, sum_residuals_mre_webb, sum_residuals_ssim_psfex, sum_residuals_ssim_webb, psfex_fwhm_residual, webbpsf_fwhm_residual, reduced_chi2_psfex, reduced_chi2_webb])
-    except Exception as e:
-        print("An error occurred: ", e)
-
-df = data_table.to_pandas()
-sorted_df = df.sort_values(by=['Filter', 'Detector'])
-pd.set_option("display.max_columns", None)  # Display all columns
-pd.set_option("display.width", None)  # Disable column width truncation
-
-# Print the DataFrame (which will show all columns)
-print(sorted_df)
-
-# Optionally, convert the DataFrame back to an Astropy table
-table = Table.from_pandas(sorted_df)
-hdu = fits.PrimaryHDU()
-table_hdu = fits.table_to_hdu(table)
-hdu = fits.HDUList([hdu, table_hdu])
-hdu.writeto('output_statistics.fits', overwrite=True)
