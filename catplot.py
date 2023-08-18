@@ -41,7 +41,7 @@ class plot():
         self.stars = catalog_object.data['VIGNET'] #formerly starmaker
         self.psfs  = catalog_object.data[psf_object.nameColumn()] #formerly psfmaker
         self.err_stamps = catalog_object.data['ERR_VIGNET']
-        catalog_object.crop([psf_object], vignet_size=100)
+        catalog_object.crop([psf_object], vignet_size=75)
         catalog_object.save_new(outname=catalog_object.catalog)
         try:
             self.cropped_stars = catalog_object.data['VIGNET_CROPPED']
@@ -70,6 +70,8 @@ class resid_plot(plot):
         self.cropped_psfs = psfs
         #self.avg_psf = np.nanmean(self.cropped_psfs, axis=0)
         self.avg_psf = np.nanmean(psfs, axis=0)
+        #self.psf_std = np.nanstd(psfs, axis=0)
+        self.sem = 0.0
         self.avg_residual = np.zeros(self.avg_star.shape)
         set_rc_params(fontsize=16)
         self.titles = []
@@ -218,7 +220,8 @@ class resid_plot(plot):
             vmin2 = -1*vmax2
 
         norm = colors.SymLogNorm(vmin=vmin, vmax=vmax, linthresh=1e-4)
-        norm2 = colors.SymLogNorm(vmin=vmin2, vmax=vmax2, linthresh=1e-4)
+        #norm2 = colors.SymLogNorm(vmin=vmin2, vmax=vmax2, linthresh=1e-4)
+        norm2 = colors.TwoSlopeNorm(vcenter=0, vmin=vmin2, vmax=vmax2)
         #norm2 = colors.TwoSlopeNorm(0)
         cmap=plt.cm.turbo
         #cmap=plt.cm.BrBG
@@ -276,7 +279,11 @@ class mean_relative_error_plot(resid_plot):
                     if (resids[i][j,k] > 50) or (resids[i][j,k] < -50):
                         resids[i][j,k] = np.nan
         self.avg_residual = np.nanmean(resids, axis=0)
+        self.sem = np.nanstd(self.avg_residual) #num pixels or stars?
         self.set_residuals_sum()
+
+    def return_sem(self):
+        return self.sem
 
 class mean_absolute_error_plot(resid_plot):
     def __init__(self, catalog_object, psf_object):
@@ -298,7 +305,62 @@ class mean_absolute_error_plot(resid_plot):
                     if (resids[i][j,k] > 50) or (resids[i][j,k] < -50):
                         resids[i][j,k] = np.nan
         self.avg_residual = np.nanmean(resids, axis=0)
+        self.sem = np.nanstd(self.avg_residual)
         self.set_residuals_sum()
+    
+    def return_sem(self):
+        return self.sem
+    
+    def save_figure(self, outname):
+        #vmin = -0.1 #np.nanmin(self.avg_psf)
+        vmin = np.minimum(np.nanmin(self.avg_star), np.nanmin(self.avg_psf))
+        #vmax = 1
+        vmax = np.maximum(np.nanmax(self.avg_star), np.nanmax(self.avg_psf))
+        
+        vmin2 = np.nanmin(self.avg_residual)
+        vmax2 = np.nanmax(self.avg_residual)
+        if np.abs(vmin2) > np.abs(vmax2):
+            vmax2 = np.abs(vmin2)
+        else:
+            vmin2 = -1*vmax2
+
+        norm = colors.SymLogNorm(vmin=vmin, vmax=vmax, linthresh=1e-4)
+        #norm2 = colors.SymLogNorm(vmin=0, vmax=np.nanmax(self.avg_residual), linthresh=1e-1)
+        #norm2 = colors.TwoSlopeNorm(0)
+        cmap=plt.cm.turbo
+        #cmap=plt.cm.BrBG
+        #cmap = plt.cm.inferno
+        cmap2=plt.cm.Blues
+        fig, axs = plt.subplots(nrows=1, ncols=3, sharey=True, figsize=[15,7], tight_layout=True)
+        
+        im = axs[0].imshow(self.avg_star, norm=norm, cmap=cmap)
+        axs[0].set_title(self.titles[0])
+        divider = make_axes_locatable(axs[0])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im, cax=cax)
+        axs[0].axvline((self.avg_star.shape[0]-1)*0.5,color='black')
+        axs[0].axhline((self.avg_star.shape[1]-1)*0.5,color='black')
+        
+        im = axs[1].imshow(self.avg_psf, norm=norm, cmap=cmap)
+        axs[1].set_title(self.titles[1])
+        divider = make_axes_locatable(axs[1])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im, cax=cax)
+        axs[1].axvline((self.avg_psf.shape[0]-1)*0.5,color='black')
+        axs[1].axhline((self.avg_psf.shape[1]-1)*0.5,color='black')
+        
+        im = axs[2].imshow(self.avg_residual, cmap=cmap2)
+        axs[2].set_title(self.titles[2])
+        divider = make_axes_locatable(axs[2])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im, cax=cax)
+        axs[2].axvline((self.avg_residual.shape[0]-1)*0.5,color='black')
+        axs[2].axhline((self.avg_residual.shape[1]-1)*0.5,color='black')
+
+        fig.tight_layout()
+
+        plt.savefig(outname)
+
 
 class mean_error_plot(resid_plot):
     def __init__(self, catalog_object, psf_object):
@@ -352,9 +414,9 @@ class chi_2_error_plot(resid_plot):
                 chi2_finite_temp = np.divide(np.square(stars[i] - psfs[i]), np.square(noise_map[i]))
                 chi2_finite = chi2_finite_temp[np.isfinite(chi2_finite_temp)]
                 ddof = chi2_finite.size - nparams - (nan_count + inf_count)
-                if chi2_finite.sum()/ddof > 75:
-                    print(np.sum(np.isnan(stars[i]))/chi2_finite.size)
-                    print("This star had chi square greater than 75: ", i)
+                #if chi2_finite.sum()/ddof > 75:
+                    #print(np.sum(np.isnan(stars[i]))/chi2_finite.size)
+                    #print("This star had chi square greater than 75: ", i)
                 chi2_vals.append(chi2_finite.sum()/ddof)
             else:
                 resids.append(np.full(stars[0].shape, np.nan))
@@ -366,6 +428,56 @@ class chi_2_error_plot(resid_plot):
 
     def return_chi2_vals(self):
         return self.chi2_vals
+    
+    def save_figure(self, outname):
+        #vmin = -0.1 #np.nanmin(self.avg_psf)
+        vmin = np.minimum(np.nanmin(self.avg_star), np.nanmin(self.avg_psf))
+        #vmax = 1
+        vmax = np.maximum(np.nanmax(self.avg_star), np.nanmax(self.avg_psf))
+        
+        vmin2 = np.nanmin(self.avg_residual)
+        vmax2 = np.nanmax(self.avg_residual)
+        if np.abs(vmin2) > np.abs(vmax2):
+            vmax2 = np.abs(vmin2)
+        else:
+            vmin2 = -1*vmax2
+
+        norm = colors.SymLogNorm(vmin=vmin, vmax=vmax, linthresh=1e-4)
+        norm2 = colors.SymLogNorm(vmin=0, vmax=np.nanmax(self.avg_residual), linthresh=1e-4)
+        #norm2 = colors.TwoSlopeNorm(0)
+        cmap=plt.cm.turbo
+        #cmap=plt.cm.BrBG
+        #cmap = plt.cm.inferno
+        cmap2=plt.cm.Blues
+        fig, axs = plt.subplots(nrows=1, ncols=3, sharey=True, figsize=[15,7], tight_layout=True)
+        
+        im = axs[0].imshow(self.avg_star, norm=norm, cmap=cmap)
+        axs[0].set_title(self.titles[0])
+        divider = make_axes_locatable(axs[0])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im, cax=cax)
+        axs[0].axvline((self.avg_star.shape[0]-1)*0.5,color='black')
+        axs[0].axhline((self.avg_star.shape[1]-1)*0.5,color='black')
+        
+        im = axs[1].imshow(self.avg_psf, norm=norm, cmap=cmap)
+        axs[1].set_title(self.titles[1])
+        divider = make_axes_locatable(axs[1])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im, cax=cax)
+        axs[1].axvline((self.avg_psf.shape[0]-1)*0.5,color='black')
+        axs[1].axhline((self.avg_psf.shape[1]-1)*0.5,color='black')
+        
+        im = axs[2].imshow(self.avg_residual, norm=norm2, cmap=cmap2)
+        axs[2].set_title(self.titles[2])
+        divider = make_axes_locatable(axs[2])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im, cax=cax)
+        axs[2].axvline((self.avg_residual.shape[0]-1)*0.5,color='black')
+        axs[2].axhline((self.avg_residual.shape[1]-1)*0.5,color='black')
+
+        fig.tight_layout()
+
+        plt.savefig(outname)
 
 
 class ssim_error_plot(resid_plot):
